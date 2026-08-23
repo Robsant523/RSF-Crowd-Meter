@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E1520">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RSF Crowd">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<title>RSF crowd meter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0E1520;
+    --card: #161F2C;
+    --border: #263242;
+    --border-soft: #1E2836;
+    --text: #E9E6DC;
+    --text-dim: #8B93A0;
+    --text-faint: #6C7683;
+    --gold: #FDB515;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Oswald', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 40px 16px;
+    padding-top: max(40px, env(safe-area-inset-top));
+  }
+  #root { width: 100%; max-width: 380px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const SPACE_URL = 'https://api.density.io/v2/spaces/spc_863128347956216317/count';
+const TOKEN = 'shr_o69HxjQ0BYrY2FPD9HxdirhJYcFDCeRolEd744Uj88e';
+const CAPACITY = 140;
+const RSF_PAGE = 'https://recwell.berkeley.edu/facilities/recreational-sports-facility-rsf/rsf-weight-room-crowd-meter/';
+
+function statusFor(pct) {
+  if (pct < 30) return { label: 'quiet', color: '#7FB069', bg: 'rgba(127,176,105,0.12)' };
+  if (pct < 60) return { label: 'moderate', color: '#FDB515', bg: 'rgba(253,181,21,0.12)' };
+  if (pct < 95) return { label: 'busy', color: '#E58A4E', bg: 'rgba(229,138,78,0.12)' };
+  return { label: 'near capacity', color: '#DC4E33', bg: 'rgba(220,78,51,0.12)' };
+}
+
+function CircleGauge({ pct, color }) {
+  const size = 260;
+  const stroke = 18;
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(100, pct));
+  const offset = circumference * (1 - clamped / 100);
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: 'rotate(-90deg)' }}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#232E3D" strokeWidth={stroke} />
+      <circle
+        cx={size/2} cy={size/2} r={r} fill="none"
+        stroke={color} strokeWidth={stroke} strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        style={{ transition: 'stroke-dashoffset 0.7s ease, stroke 0.4s ease' }}
+      />
+    </svg>
+  );
+}
+
+function App() {
+  const [count, setCount] = useState(null);
+  const [pct, setPct] = useState(0);
+  const [state, setState] = useState('loading');
+  const [updated, setUpdated] = useState(null);
+  const intervalRef = useRef(null);
+
+  const fetchCount = useCallback(async () => {
+    setState((s) => (s === 'error' ? 'loading' : s));
+    try {
+      const res = await fetch(SPACE_URL, { headers: { Authorization: 'Bearer ' + TOKEN } });
+      if (!res.ok) throw new Error('bad response');
+      const data = await res.json();
+      const c = data.count;
+      setCount(c);
+      setPct((c / CAPACITY) * 100);
+      setUpdated(new Date());
+      setState('live');
+    } catch (e) {
+      setState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCount();
+    intervalRef.current = setInterval(fetchCount, 60000);
+    return () => clearInterval(intervalRef.current);
+  }, [fetchCount]);
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  }, []);
+
+  const s = statusFor(pct);
+
+  return (
+    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 18, overflow: 'hidden' }}>
+      <div style={{ padding: '18px 22px 14px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, letterSpacing: 1.5, color: 'var(--gold)' }}>RSF</div>
+          <div style={{ fontSize: 12, letterSpacing: 1, color: 'var(--text-dim)', marginTop: 2 }}>weight room crowd meter</div>
+        </div>
+        <div style={{
+          width: 9, height: 9, borderRadius: '50%',
+          background: state === 'live' ? '#7FB069' : state === 'error' ? '#DC4E33' : '#4F5A67'
+        }} />
+      </div>
+
+      <div style={{ padding: '30px 22px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        {state === 'error' ? (
+          <div style={{ textAlign: 'center', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6, padding: '24px 6px' }}>
+            Live data couldn't load directly (the sensor API blocks cross-origin requests from some hosts).
+            <br /><br />
+            <a href={RSF_PAGE} target="_blank" rel="noopener" style={{ color: 'var(--gold)' }}>Open the official live meter &#8594;</a>
+          </div>
+        ) : (
+          <React.Fragment>
+            <div style={{ position: 'relative', width: 260, height: 260 }}>
+              <CircleGauge pct={pct} color={s.color} />
+              <div style={{
+                position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center'
+              }}>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 58, lineHeight: 1, color: s.color }}>
+                  {state === 'loading' ? '--' : Math.round(pct)}%
+                </div>
+                <div style={{ fontSize: 12, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginTop: 6, fontWeight: 300 }}>
+                  of capacity
+                </div>
+              </div>
+            </div>
+            <div style={{
+              marginTop: 16, padding: '6px 16px', borderRadius: 20, fontSize: 12,
+              letterSpacing: 1.5, textTransform: 'uppercase', background: s.bg, color: s.color
+            }}>
+              {state === 'loading' ? 'connecting' : s.label}
+            </div>
+          </React.Fragment>
+        )}
+
+        <div style={{ width: '100%', marginTop: 20 }}>
+          <Row k="People inside" v={count === null ? '--' : count} />
+          <Row k="Approx capacity" v="140" />
+          <Row k="95% capacity line" v={pct >= 95 ? 'virtual queue active' : 'not active'} />
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', textAlign: 'center', marginTop: 12, letterSpacing: 0.5 }}>
+          {updated ? `Updated ${updated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Not yet updated'}
+        </div>
+      </div>
+
+      <div style={{ padding: '14px 22px 20px', display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
+        <button
+          onClick={fetchCount}
+          style={{
+            background: 'var(--border-soft)', border: '1px solid var(--border)', color: 'var(--text)',
+            fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: 1, textTransform: 'uppercase',
+            padding: '9px 14px', borderRadius: 8, cursor: 'pointer'
+          }}
+        >
+          {state === 'loading' ? 'Refreshing…' : 'Refresh now'}
+        </button>
+        <a href={RSF_PAGE} target="_blank" rel="noopener" style={{ fontSize: 11, color: 'var(--text-faint)', textDecoration: 'none' }}>
+          Official RecWell page &#8594;
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function Row({ k, v }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border-soft)', fontSize: 13 }}>
+      <span style={{ color: 'var(--text-dim)', letterSpacing: 0.5 }}>{k}</span>
+      <span style={{ fontWeight: 500 }}>{v}</span>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
