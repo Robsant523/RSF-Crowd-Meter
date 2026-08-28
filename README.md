@@ -1,31 +1,57 @@
-# RSF crowd meter — install as an app
+# RSF crowd meter — install as an app + phone widget with history
 
-This is a small installable web app (PWA) that shows live RSF weight room occupancy as a circular gauge.
+This is an installable web app (PWA) plus an iPhone home-screen widget. Both show live RSF weight room occupancy as a circular gauge, and the widget logs history that syncs to this website's History tab.
 
-## Why you need to host it (quick, free, 2 minutes)
+## 1. Push these files to your repo
 
-Phones and laptops only let you "install" a web app if it's served over `https://`, not opened as a local file. Easiest free options:
+```
+git init
+git add .
+git commit -m "RSF crowd meter with history"
+git branch -M main
+git remote add origin https://github.com/Robsant523/RSF-Crowd-Meter.git
+git push -u origin main
+```
 
-**Option A — GitHub Pages**
-1. Create a new GitHub repo, upload these 5 files (`index.html`, `manifest.json`, `sw.js`, `icon-192.png`, `icon-512.png`) to the root.
-2. Repo Settings → Pages → Deploy from branch → `main` → `/ (root)`.
-3. Your app will be live at `https://<your-username>.github.io/<repo-name>/`.
+Then: Settings → Pages → Deploy from branch → `main` → `/ (root)`. Live at `https://robsant523.github.io/RSF-Crowd-Meter/`.
 
-**Option B — Netlify Drop**
-1. Go to https://app.netlify.com/drop
-2. Drag this whole folder onto the page.
-3. You instantly get a live `https://...netlify.app` URL — no account needed.
+## 2. Create a GitHub token (lets the widget write history to your repo)
 
-## Installing it
+1. GitHub → your profile photo → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
+2. **Repository access** → Only select repositories → `RSF-Crowd-Meter`.
+3. **Permissions** → Repository permissions → **Contents** → set to **Read and write**.
+4. Generate, then copy the token — GitHub only shows it once.
 
-**iPhone (Safari):** open your hosted URL → Share button → "Add to Home Screen." It'll appear as a normal app icon and open full-screen.
+## 3. Set up Scriptable on your iPhone
 
-**Android (Chrome):** open your hosted URL → menu (⋮) → "Install app" or "Add to Home screen."
+Install the free **Scriptable** app, then create three scripts (paste the matching file's contents into each, name them exactly as shown):
 
-**Mac/Windows (Chrome or Edge):** open your hosted URL → click the install icon (⊕ or a small monitor icon) in the address bar → "Install." It opens in its own window, pinnable to your dock/taskbar.
+| Script name | File |
+|---|---|
+| `RSFData` | `RSFData.js` — shared module, not run directly |
+| `RSF Crowd` | `rsf-crowd-meter-scriptable.js` — the widget |
+| `RSF History` | `RSF-History.js` — local history viewer/chart |
+| `RSF Setup` | `RSF-Setup.js` — run this once |
 
-Once installed, the app updates its data live every 60 seconds whenever you open it, and caches the shell so it opens instantly even offline (though live counts obviously need a connection).
+Run **RSF Setup** once and paste in the token from step 2 when prompted. It's stored in the iOS Keychain, not in the script text.
+
+Then add the widget: long-press your home screen → **+** → **Scriptable** → small or medium → edit widget → set Script to `RSF Crowd`.
+
+## 4. What happens automatically
+
+Every time the widget refreshes (iOS decides the timing, roughly every 15–30+ min):
+- It fetches the live count
+- Appends it to a local history log on your phone
+- Pushes the updated history to `history.json` in your GitHub repo
+
+Your website's **History** tab reads that same `history.json` file, so it updates within a minute or two of each widget refresh (however long GitHub Pages takes to redeploy).
+
+## 5. Installing the web app itself
+
+**iPhone (Safari):** open your hosted URL → Share → "Add to Home Screen."
+**Mac/Windows (Chrome/Edge):** open the URL → install icon in the address bar → "Install."
 
 ## About the data
 
-It calls the same Density.io sensor feed the official Berkeley page uses, capped at 140 people = 100%. If that call ever gets blocked by CORS, the app falls back to a link straight to Berkeley's official live meter.
+Both the widget and the website call the same Density.io sensor feed Berkeley's own page uses, capped at 140 people = 100%. If that call is ever blocked, both fall back to a link to Berkeley's official page.
+

@@ -36,7 +36,7 @@
     padding: 40px 16px;
     padding-top: max(40px, env(safe-area-inset-top));
   }
-  #root { width: 100%; max-width: 380px; }
+  #root { width: 100%; max-width: 460px; }
 </style>
 </head>
 <body>
@@ -45,14 +45,16 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 
 <script type="text/babel" data-type="module">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 const SPACE_URL = 'https://api.density.io/v2/spaces/spc_863128347956216317/count';
 const TOKEN = 'shr_o69HxjQ0BYrY2FPD9HxdirhJYcFDCeRolEd744Uj88e';
 const CAPACITY = 140;
 const RSF_PAGE = 'https://recwell.berkeley.edu/facilities/recreational-sports-facility-rsf/rsf-weight-room-crowd-meter/';
+const HISTORY_URL = './history.json';
 
 function statusFor(pct) {
   if (pct < 30) return { label: 'quiet', color: '#7FB069', bg: 'rgba(127,176,105,0.12)' };
@@ -83,7 +85,16 @@ function CircleGauge({ pct, color }) {
   );
 }
 
-function App() {
+function Row({ k, v }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border-soft)', fontSize: 13 }}>
+      <span style={{ color: 'var(--text-dim)', letterSpacing: 0.5 }}>{k}</span>
+      <span style={{ fontWeight: 500 }}>{v}</span>
+    </div>
+  );
+}
+
+function LiveView() {
   const [count, setCount] = useState(null);
   const [pct, setPct] = useState(0);
   const [state, setState] = useState('loading');
@@ -112,27 +123,10 @@ function App() {
     return () => clearInterval(intervalRef.current);
   }, [fetchCount]);
 
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
-    }
-  }, []);
-
   const s = statusFor(pct);
 
   return (
-    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 18, overflow: 'hidden' }}>
-      <div style={{ padding: '18px 22px 14px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, letterSpacing: 1.5, color: 'var(--gold)' }}>RSF</div>
-          <div style={{ fontSize: 12, letterSpacing: 1, color: 'var(--text-dim)', marginTop: 2 }}>weight room crowd meter</div>
-        </div>
-        <div style={{
-          width: 9, height: 9, borderRadius: '50%',
-          background: state === 'live' ? '#7FB069' : state === 'error' ? '#DC4E33' : '#4F5A67'
-        }} />
-      </div>
-
+    <div>
       <div style={{ padding: '30px 22px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         {state === 'error' ? (
           <div style={{ textAlign: 'center', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6, padding: '24px 6px' }}>
@@ -194,11 +188,209 @@ function App() {
   );
 }
 
-function Row({ k, v }) {
+function ChartCanvas({ entries }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    const labels = entries.map((e) => new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
+    const values = entries.map((e) => e.pct);
+
+    if (chartRef.current) chartRef.current.destroy();
+    chartRef.current = new Chart(canvasRef.current, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          borderColor: '#FDB515',
+          backgroundColor: 'rgba(253,181,21,0.12)',
+          fill: true,
+          pointRadius: 0,
+          borderWidth: 2,
+          tension: 0.25
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { min: 0, max: 100, ticks: { color: '#8B93A0' }, grid: { color: '#1E2836' } },
+          x: { ticks: { color: '#8B93A0', maxTicksLimit: 6 }, grid: { color: '#1E2836' } }
+        }
+      }
+    });
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [entries]);
+
+  return <canvas ref={canvasRef} style={{ width: '100%', height: 220 }} />;
+}
+
+function HistoryView() {
+  const [history, setHistory] = useState(null);
+  const [error, setError] = useState(false);
+  const [range, setRange] = useState(1); // days
+  const [lookupTime, setLookupTime] = useState('');
+
+  useEffect(() => {
+    fetch(HISTORY_URL, { cache: 'no-store' })
+      .then((r) => { if (!r.ok) throw new Error('no history yet'); return r.json(); })
+      .then(setHistory)
+      .catch(() => setError(true));
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!history) return [];
+    const cutoff = Date.now() - range * 24 * 60 * 60 * 1000;
+    return history.filter((e) => e.t >= cutoff).sort((a, b) => a.t - b.t);
+  }, [history, range]);
+
+  const stats = useMemo(() => {
+    if (filtered.length === 0) return null;
+    const values = filtered.map((e) => e.pct);
+    const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+    const peak = Math.round(Math.max(...values));
+    return { avg, peak, count: filtered.length };
+  }, [filtered]);
+
+  const lookupResult = useMemo(() => {
+    if (!history || !lookupTime) return null;
+    const target = new Date(lookupTime).getTime();
+    if (isNaN(target)) return null;
+    let best = null, bestDiff = Infinity;
+    for (const e of history) {
+      const diff = Math.abs(e.t - target);
+      if (diff < bestDiff) { best = e; bestDiff = diff; }
+    }
+    if (!best) return null;
+    return { entry: best, diffMinutes: Math.round(bestDiff / 60000) };
+  }, [history, lookupTime]);
+
+  if (error) {
+    return (
+      <div style={{ padding: '30px 22px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6 }}>
+        No history yet. The iPhone widget writes <code>history.json</code> to this repo each time it refreshes —
+        once it's run at least once with sync set up, it'll show up here.
+      </div>
+    );
+  }
+
+  if (!history) {
+    return <div style={{ padding: '30px 22px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Loading history…</div>;
+  }
+
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border-soft)', fontSize: 13 }}>
-      <span style={{ color: 'var(--text-dim)', letterSpacing: 0.5 }}>{k}</span>
-      <span style={{ fontWeight: 500 }}>{v}</span>
+    <div style={{ padding: '22px' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {[1, 7, 30].map((d) => (
+          <button
+            key={d}
+            onClick={() => setRange(d)}
+            style={{
+              flex: 1, padding: '8px 0', borderRadius: 8, cursor: 'pointer',
+              fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: 1, textTransform: 'uppercase',
+              background: range === d ? 'var(--gold)' : 'var(--border-soft)',
+              color: range === d ? '#0E1520' : 'var(--text-dim)',
+              border: '1px solid var(--border)'
+            }}
+          >
+            {d === 1 ? '24h' : d + 'd'}
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', color: 'var(--text-dim)', fontSize: 13, padding: '20px 0' }}>No samples in this window yet.</div>
+      ) : (
+        <React.Fragment>
+          <ChartCanvas entries={filtered} />
+          {stats && (
+            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+              <StatBox label="average" value={stats.avg + '%'} />
+              <StatBox label="peak" value={stats.peak + '%'} />
+              <StatBox label="samples" value={stats.count} />
+            </div>
+          )}
+        </React.Fragment>
+      )}
+
+      <div style={{ marginTop: 26 }}>
+        <div style={{ fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 8 }}>
+          How full was it at a specific time?
+        </div>
+        <input
+          type="datetime-local"
+          value={lookupTime}
+          onChange={(e) => setLookupTime(e.target.value)}
+          style={{
+            width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)',
+            background: 'var(--border-soft)', color: 'var(--text)', fontFamily: "'Oswald', sans-serif", fontSize: 13
+          }}
+        />
+        {lookupResult && (
+          <div style={{ marginTop: 10, fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+            Closest reading: <span style={{ color: 'var(--gold)', fontWeight: 500 }}>{lookupResult.entry.pct}% full</span>
+            {' '}({lookupResult.entry.count} people) at {new Date(lookupResult.entry.t).toLocaleString()}
+            {lookupResult.diffMinutes > 30 && (
+              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
+                (nearest sample was {lookupResult.diffMinutes} min from the time you picked)
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatBox({ label, value }) {
+  return (
+    <div style={{ flex: 1, background: 'var(--border-soft)', borderRadius: 10, padding: '10px 0', textAlign: 'center' }}>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: 'var(--gold)' }}>{value}</div>
+      <div style={{ fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--text-faint)', marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState('live');
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  }, []);
+
+  return (
+    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 18, overflow: 'hidden' }}>
+      <div style={{ padding: '18px 22px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, letterSpacing: 1.5, color: 'var(--gold)' }}>RSF</div>
+          <div style={{ fontSize: 12, letterSpacing: 1, color: 'var(--text-dim)', marginTop: 2 }}>weight room crowd meter</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', margin: '16px 22px 0', borderBottom: '1px solid var(--border)' }}>
+        {['live', 'history'].map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            style={{
+              flex: 1, padding: '10px 0', background: 'none', border: 'none', cursor: 'pointer',
+              fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase',
+              color: tab === t ? 'var(--gold)' : 'var(--text-faint)',
+              borderBottom: tab === t ? '2px solid var(--gold)' : '2px solid transparent',
+              marginBottom: -1
+            }}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'live' ? <LiveView /> : <HistoryView />}
     </div>
   );
 }
