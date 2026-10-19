@@ -1,19 +1,36 @@
-# RSF crowd meter — install as an app + phone widget with history
+# RSF crowd meter — live occupancy and shared history
 
-This is an installable web app (PWA) plus an iPhone home-screen widget. Both show live RSF weight room occupancy as a circular gauge, and the widget logs history that syncs to this website's History tab.
+The History tab combines automatic readings with optional iPhone widget readings. Choose a weekday to compare hourly averages over the last eight weeks, then use the existing recent-readings chart and time lookup.
 
-## 1. Push these files to your repo
+## Enable collection
 
+1. Merge the history changes into `main`.
+2. In Settings → Pages, change Source to **GitHub Actions**.
+3. Open Actions → **Collect history and deploy** → Run workflow on `main`.
+4. Check that collection, history commit, and Pages deployment succeed.
+
+The workflow requests repository Contents write access and Pages deployment permissions. Repository policy and branch protection must permit the automated history commits. It samples approximately every 15 minutes. GitHub schedules may be delayed or disabled after inactivity; check Actions when collection is behind. See [GitHub schedule documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+
+Automatic readings are retained for 56 days in `data/history.json`. Widget uploads continue to use the original root `history.json`, so an older phone log cannot overwrite the automatic dataset. No private GitHub token is needed for the scheduled collector. The existing Density share token is used; do not replace this public token with a private API key.
+
+## Understanding history
+
+Hourly averages use Berkeley time (America/Los_Angeles), including daylight saving changes. Each recorded date has equal weight, even when one date has more samples. The chart shows the number of dates behind every hour. A dash means no data; zero means a real zero count. All hours are shown, including potentially closed hours: confirm opening times on the official RecWell page. A single date is an early reading, not an established pattern. Collection starts when enabled; there is no fabricated backfill.
+
+The recent chart uses Pacific time. The date/time lookup explicitly uses your device's local time. History refreshes every five minutes. Failed or partial loads are identified and previously loaded history is retained when both sources fail. Both sources are validated and duplicate timestamps are removed. The recent summary is a sample average; the weekday view weights dates equally.
+
+## Verification
+
+```sh
+node scripts/test-history.cjs
+python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
-git init
-git add .
-git commit -m "RSF crowd meter with history"
-git branch -M main
-git remote add origin https://github.com/Robsant523/RSF-Crowd-Meter.git
-git push -u origin main
-```
 
-Then: Settings → Pages → Deploy from branch → `main` → `/ (root)`. Live at `https://robsant523.github.io/RSF-Crowd-Meter/`.
+The collector only writes successful, nonnegative integer readings and retains existing history on request/validation failure. Its file replacement is atomic. The workflow deploys existing data if collection fails and then reports a failed run so the outage is visible.
+
+## Optional iPhone widget
+
+The existing Scriptable files and local viewer still work. Widget sync is optional and is separate from the automatic collector. Follow these instructions only if you also want your phone's observations in the website history:
 
 ## 2. Create a GitHub token (lets the widget write history to your repo)
 
@@ -37,21 +54,7 @@ Run **RSF Setup** once and paste in the token from step 2 when prompted. It's st
 
 Then add the widget: long-press your home screen → **+** → **Scriptable** → small or medium → edit widget → set Script to `RSF Crowd`.
 
-## 4. What happens automatically
 
-Every time the widget refreshes (iOS decides the timing, roughly every 15–30+ min):
-- It fetches the live count
-- Appends it to a local history log on your phone
-- Pushes the updated history to `history.json` in your GitHub repo
+## Install the web app
 
-Your website's **History** tab reads that same `history.json` file, so it updates within a minute or two of each widget refresh (however long GitHub Pages takes to redeploy).
-
-## 5. Installing the web app itself
-
-**iPhone (Safari):** open your hosted URL → Share → "Add to Home Screen."
-**Mac/Windows (Chrome/Edge):** open the URL → install icon in the address bar → "Install."
-
-## About the data
-
-Both the widget and the website call the same Density.io sensor feed Berkeley's own page uses, capped at 140 people = 100%. If that call is ever blocked, both fall back to a link to Berkeley's official page.
-
+Open the HTTPS Pages URL. On iPhone: Safari → Share → Add to Home Screen. On desktop: the browser's install option. Live counts still depend on upstream sensor availability and browser CORS. React, Babel, Chart.js and fonts remain externally hosted, so a cold offline launch is not guaranteed.

@@ -37,6 +37,15 @@
     padding-top: max(40px, env(safe-area-inset-top));
   }
   #root { width: 100%; max-width: 460px; }
+  .history-note { color: #AAB2BF; font-size: 12px; line-height: 1.6; margin: 8px 0 14px; }
+  .days { display: flex; gap: 4px; margin: 16px 0; }
+  .days button { flex: 1; min-width: 0; padding: 10px 0; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; }
+  .days button[aria-pressed="true"] { background: var(--gold); color: #0E1520; border-color: var(--gold); }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+  .history-hour { display: grid; grid-template-columns: 43px 1fr 38px 46px; align-items: center; gap: 8px; margin: 9px 0; font-size: 12px; }
+  .history-hour small { color: #AAB2BF; font-size: 10px; }
+  .history-track { height: 12px; background: #263242; border-radius: 3px; overflow: hidden; }
+  .history-track div { height: 100%; min-width: 2px; border-radius: 3px; }
 </style>
 </head>
 <body>
@@ -47,6 +56,7 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 
+<script src="history.js"></script>
 <script type="text/babel" data-type="module">
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
@@ -108,6 +118,7 @@ function LiveView() {
       if (!res.ok) throw new Error('bad response');
       const data = await res.json();
       const c = data.count;
+      if (!Number.isInteger(c) || c < 0) throw new Error('Invalid count');
       setCount(c);
       setPct((c / CAPACITY) * 100);
       setUpdated(new Date());
@@ -162,7 +173,7 @@ function LiveView() {
         <div style={{ width: '100%', marginTop: 20 }}>
           <Row k="People inside" v={count === null ? '--' : count} />
           <Row k="Approx capacity" v="140" />
-          <Row k="95% capacity line" v={pct >= 95 ? 'virtual queue active' : 'not active'} />
+          <Row k="95% capacity line" v={state !== 'live' ? 'unavailable' : pct >= 95 ? 'virtual queue active' : 'not active'} />
         </div>
         <div style={{ fontSize: 11, color: 'var(--text-faint)', textAlign: 'center', marginTop: 12, letterSpacing: 0.5 }}>
           {updated ? `Updated ${updated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Not yet updated'}
@@ -194,7 +205,7 @@ function ChartCanvas({ entries }) {
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const labels = entries.map((e) => new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
+    const labels = entries.map((e) => new Date(e.t).toLocaleString([], { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
     const values = entries.map((e) => e.pct);
 
     if (chartRef.current) chartRef.current.destroy();
@@ -228,17 +239,55 @@ function ChartCanvas({ entries }) {
   return <canvas ref={canvasRef} style={{ width: '100%', height: 220 }} />;
 }
 
+function HistoryPanel({ entries }) {
+  const [day, setDay] = useState(RSFHistory.parts(new Date()).day);
+  const hours = RSFHistory.summarize(entries.map(e => ({ at: new Date(e.t).toISOString(), count: e.count })), day);
+  return <section aria-labelledby="history-heading" style={{ padding: '22px', borderTop: '1px solid var(--border)' }}>
+    <h2 id="history-heading" style={{ fontSize: 22, fontWeight: 500 }}>Plan your visit</h2>
+    <p className="history-note">Hourly averages · last 8 weeks · Berkeley time</p>
+    <div className="days" role="group" aria-label="Day of week">
+      {RSFHistory.days.map(d => <button key={d} aria-pressed={day === d} onClick={() => setDay(d)}>{d}</button>)}
+    </div>
+    {hours.every(h => h.days === 0) && <p className="history-note">No readings for {day} yet. History builds as collection runs.</p>}
+    <div className="history-hours">
+      {hours.map(h => <div className="history-hour" key={h.hour}>
+        <span>{RSFHistory.hourLabel(h.hour)}</span>
+        <div className="history-track" aria-hidden="true">{h.days > 0 && <div style={{ width: `${Math.min(100, h.average / CAPACITY * 100)}%`, background: statusFor(h.average / CAPACITY * 100).color }} />}</div>
+        <span>{h.days ? `${Math.round(h.average / CAPACITY * 100)}%` : '—'}</span>
+        <small>{h.days ? `${h.days} ${h.days === 1 ? 'day' : 'days'}` : 'No data'}</small>
+      </div>)}
+    </div>
+    <p className="history-note">Bars show average occupancy as a percentage of 140 people. Each recorded date has equal weight. One day is an early reading, not an established pattern. Missing readings are never treated as zero.</p>
+    <p className="history-note">Includes all hours; zero can mean the gym was closed. Check the official RecWell page for opening hours. Past counts do not guarantee current availability.</p>
+  </section>;
+}
+
+
 function HistoryView() {
   const [history, setHistory] = useState(null);
   const [error, setError] = useState(false);
+  const [partial, setPartial] = useState(false);
   const [range, setRange] = useState(1); // days
   const [lookupTime, setLookupTime] = useState('');
 
   useEffect(() => {
-    fetch(HISTORY_URL, { cache: 'no-store' })
-      .then((r) => { if (!r.ok) throw new Error('no history yet'); return r.json(); })
-      .then(setHistory)
-      .catch(() => setError(true));
+    let disposed = false;
+    async function load() {
+      const results = await Promise.allSettled([HISTORY_URL, './data/history.json'].map(async url => {
+        const r = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(20000) });
+        if (!r.ok) throw new Error('History unavailable');
+        return RSFHistory.normalize(await r.json());
+      }));
+      if (disposed) return;
+      const good = results.filter(r => r.status === 'fulfilled');
+      setPartial(good.length === 1);
+      if (!good.length) { setError(true); return; }
+      setHistory(RSFHistory.merge(good.map(r => r.value)));
+      setError(false);
+    }
+    load();
+    const timer = setInterval(load, 300000);
+    return () => { disposed = true; clearInterval(timer); };
   }, []);
 
   const filtered = useMemo(() => {
@@ -268,11 +317,10 @@ function HistoryView() {
     return { entry: best, diffMinutes: Math.round(bestDiff / 60000) };
   }, [history, lookupTime]);
 
-  if (error) {
+  if (error && !history) {
     return (
       <div style={{ padding: '30px 22px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6 }}>
-        No history yet. The iPhone widget writes <code>history.json</code> to this repo each time it refreshes —
-        once it's run at least once with sync set up, it'll show up here.
+        History could not load. Check your connection and try reopening this tab. It also retries automatically every five minutes.
       </div>
     );
   }
@@ -283,6 +331,11 @@ function HistoryView() {
 
   return (
     <div style={{ padding: '22px' }}>
+      {error && <p role="status" className="history-note">Refresh failed. Showing the last loaded history.</p>}
+      {partial && <p role="status" className="history-note">One history source could not load. Showing available readings.</p>}
+      {history.length > 0 && Date.now() - history[history.length - 1].t > 3600000 && <p className="history-note">Collection is behind. Last reading: {new Date(history[history.length - 1].t).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} Pacific.</p>}
+      <HistoryPanel entries={history} />
+      <h2 style={{ fontSize: 20, marginBottom: 12 }}>Recent readings · Pacific time</h2>
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         {[1, 7, 30].map((d) => (
           <button
@@ -318,7 +371,7 @@ function HistoryView() {
 
       <div style={{ marginTop: 26 }}>
         <div style={{ fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 8 }}>
-          How full was it at a specific time?
+          How full was it? (your device’s local time)
         </div>
         <input
           type="datetime-local"
@@ -399,3 +452,4 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 </script>
 </body>
 </html>
+
