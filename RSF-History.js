@@ -25,7 +25,7 @@ async function mainMenu() {
 async function showChart(days) {
   const end = new Date();
   const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
-  const entries = RSFData.historyBetween(start, end);
+  const entries = await RSFData.historyBetween(start, end);
 
   if (entries.length === 0) {
     const a = new Alert();
@@ -99,7 +99,7 @@ async function lookupTime() {
   dp.initialDate = new Date();
   const picked = await dp.pickDateAndTime();
 
-  const result = RSFData.nearestEntry(picked);
+  const result = await RSFData.nearestEntry(picked);
   const a = new Alert();
   if (!result) {
     a.title = "No data";
@@ -119,7 +119,7 @@ async function lookupTime() {
 }
 
 async function exportLog() {
-  const history = RSFData.loadHistory();
+  const history = await RSFData.loadHistory();
   const fm = FileManager.iCloud();
   const path = RSFData.logPath();
   const a = new Alert();
@@ -131,3 +131,4 @@ async function exportLog() {
 
 await mainMenu();
 Script.complete();
+

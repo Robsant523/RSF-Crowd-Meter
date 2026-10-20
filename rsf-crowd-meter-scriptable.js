@@ -83,14 +83,26 @@ async function buildWidget() {
   let count = null;
   let pct = 0;
   let errored = false;
+  let historyStatus = "";
 
   try {
     count = await RSFData.fetchCount();
     pct = (count / CAPACITY) * 100;
-    const updatedHistory = RSFData.recordSample(count);
-    await RSFData.pushHistoryToGitHub(updatedHistory); // no-ops until you run the one-time token setup
+
   } catch (e) {
     errored = true;
+  }
+
+  if (!errored) {
+    try {
+      const entries = await RSFData.recordSample(count);
+      const result = await RSFData.pushHistoryToGitHub(entries);
+      historyStatus = result.ok ? "History synced" : result.skipped ? "History local · run Setup" : "Saved locally · sync failed";
+      if (!result.ok) console.warn(result.error);
+    } catch (e) {
+      historyStatus = "History save failed · open app";
+      console.warn(String(e));
+    }
   }
 
   const family = config.widgetFamily || "small";
@@ -174,6 +186,10 @@ async function buildWidget() {
     countText.textColor = COLORS.dim;
   }
 
+  widget.addSpacer(3);
+  const syncLabel = widget.addText(historyStatus);
+  syncLabel.font = Font.systemFont(9);
+  syncLabel.textColor = COLORS.dim;
   widget.url = "https://robsant523.github.io/RSF-Crowd-Meter/";
   widget.refreshAfterDate = new Date(Date.now() + 5 * 60 * 1000);
   return widget;
@@ -188,3 +204,4 @@ if (config.runsInWidget) {
   await widget.presentSmall();
 }
 Script.complete();
+

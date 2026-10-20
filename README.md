@@ -58,3 +58,17 @@ Then add the widget: long-press your home screen → **+** → **Scriptable** �
 ## Install the web app
 
 Open the HTTPS Pages URL. On iPhone: Safari → Share → Add to Home Screen. On desktop: the browser's install option. Live counts still depend on upstream sensor availability and browser CORS. React, Babel, Chart.js and fonts remain externally hosted, so a cold offline launch is not guaranteed.
+
+## Update the phone scripts after this change
+
+Replace all four Scriptable scripts together: `RSFData`, `RSF Crowd`, `RSF History`, and `RSF Setup`, using their matching repository files. History reads are now asynchronous, so older copies of the widget or viewer are incompatible with the updated module. Updating GitHub does not automatically update scripts already installed on your phone.
+
+Run **RSF Setup** after replacing them. It saves the token in Keychain, fetches a real sensor count, saves it locally, and checks the GitHub upload. It reports the actual failing stage/HTTP status instead of claiming sync is working merely because the token was saved. Tokens need Contents read/write on this repository and must be allowed by branch rules. Never paste your token into a public issue or source file.
+
+The widget keeps the live gauge available when history storage or GitHub sync fails and shows a short history status. Detailed errors appear in Scriptable's console. Unsynced readings remain in the phone's history and are retried on the next successful refresh. Existing iCloud files are downloaded before reading; download or parse errors stop writes instead of replacing history with an empty log. Remote and local readings are merged, and GitHub conflicts are retried against the latest file SHA. A missing root `history.json` is treated as an error; restore it from Git history (or initialize it to `[]` only for a new installation).
+
+The phone still collects only when iOS runs the widget. `refreshAfterDate` requests a refresh; it does not guarantee one. Use the scheduled GitHub collector for ongoing shared history, and treat the phone as a supplementary source. Simultaneous local Scriptable executions/iCloud edits are not transactionally locked; avoid running multiple copies of the collector at once.
+
+Phone regression tests: `node --test scripts/test-phone.cjs`. These mock Scriptable's APIs to cover delayed/failed iCloud reads, corrupt files, invalid sensor responses, missing credentials, HTTP failures, merging, conflict retries and unchanged uploads. Real-device execution must be verified by running RSF Setup on your phone.
+
+API references: [Scriptable FileManager](https://docs.scriptable.app/filemanager/#downloadfilefromicloud), [Scriptable Request](https://docs.scriptable.app/request/).
