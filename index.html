@@ -3,7 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0E1520">
+<meta name="theme-color" content="#F2F2F2">
+<script>
+(function () {
+  let saved;
+  try { saved = localStorage.getItem('rsf-theme'); } catch (_) {}
+  const system = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const theme = saved === 'light' || saved === 'dark' ? saved : system ? 'dark' : 'light';
+  document.documentElement.dataset.theme = theme;
+  document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#111111' : '#F2F2F2';
+})();
+</script>
+
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="RSF Crowd">
@@ -12,22 +23,26 @@
 <link rel="icon" href="icon-192.png">
 <title>RSF crowd meter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #0E1520;
-    --card: #161F2C;
-    --border: #263242;
-    --border-soft: #1E2836;
-    --text: #E9E6DC;
-    --text-dim: #8B93A0;
-    --text-faint: #6C7683;
-    --gold: #FDB515;
+  :root, :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #F2F2F2; --card: #FFFFFF; --border: #D4D4D4; --border-soft: #EAEAEA;
+    --text: #171717; --text-dim: #595959; --text-faint: #666666;
+    --accent: #222222; --on-accent: #FFFFFF; --track: #E5E5E5;
+    --chart-fill: rgba(0,0,0,0.07); --shadow: 0 18px 60px rgba(0,0,0,0.05);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #111111; --card: #1B1B1B; --border: #3D3D3D; --border-soft: #2A2A2A;
+    --text: #F3F3F3; --text-dim: #B8B8B8; --text-faint: #A6A6A6;
+    --accent: #E8E8E8; --on-accent: #171717; --track: #383838;
+    --chart-fill: rgba(255,255,255,0.09); --shadow: 0 18px 60px rgba(0,0,0,0.15);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
   body {
-    font-family: 'Oswald', sans-serif;
+    font-family: 'Inter', system-ui, sans-serif;
     background: var(--bg);
     color: var(--text);
     display: flex;
@@ -36,15 +51,19 @@
     padding: 40px 16px;
     padding-top: max(40px, env(safe-area-inset-top));
   }
+  button, input { font: inherit; }
+  button { min-height: 44px; }
+  .theme-toggle { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 999px; padding: 8px 12px; background: var(--card); color: var(--text); font-size: 12px; cursor: pointer; flex-shrink: 0; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
   #root { width: 100%; max-width: 460px; }
-  .history-note { color: #AAB2BF; font-size: 12px; line-height: 1.6; margin: 8px 0 14px; }
+  .history-note { color: var(--text-dim); font-size: 12px; line-height: 1.6; margin: 8px 0 14px; }
   .days { display: flex; gap: 4px; margin: 16px 0; }
   .days button { flex: 1; min-width: 0; padding: 10px 0; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; }
-  .days button[aria-pressed="true"] { background: var(--gold); color: #0E1520; border-color: var(--gold); }
-  button:focus-visible, a:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+  .days button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   .history-hour { display: grid; grid-template-columns: 43px 1fr 38px 46px; align-items: center; gap: 8px; margin: 9px 0; font-size: 12px; }
-  .history-hour small { color: #AAB2BF; font-size: 10px; }
-  .history-track { height: 12px; background: #263242; border-radius: 3px; overflow: hidden; }
+  .history-hour small { color: var(--text-dim); font-size: 10px; }
+  .history-track { height: 12px; background: var(--track); border-radius: 3px; overflow: hidden; }
   .history-track div { height: 100%; min-width: 2px; border-radius: 3px; }
 </style>
 </head>
@@ -60,6 +79,8 @@
 <script type="text/babel" data-type="module">
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
+const ThemeContext = React.createContext('light');
+
 const SPACE_URL = 'https://api.density.io/v2/spaces/spc_863128347956216317/count';
 const TOKEN = 'shr_o69HxjQ0BYrY2FPD9HxdirhJYcFDCeRolEd744Uj88e';
 const CAPACITY = 140;
@@ -67,10 +88,8 @@ const RSF_PAGE = 'https://recwell.berkeley.edu/facilities/recreational-sports-fa
 const HISTORY_URL = './history.json';
 
 function statusFor(pct) {
-  if (pct < 30) return { label: 'quiet', color: '#7FB069', bg: 'rgba(127,176,105,0.12)' };
-  if (pct < 60) return { label: 'moderate', color: '#FDB515', bg: 'rgba(253,181,21,0.12)' };
-  if (pct < 95) return { label: 'busy', color: '#E58A4E', bg: 'rgba(229,138,78,0.12)' };
-  return { label: 'near capacity', color: '#DC4E33', bg: 'rgba(220,78,51,0.12)' };
+  const label = pct < 30 ? 'quiet' : pct < 60 ? 'moderate' : pct < 95 ? 'busy' : 'near capacity';
+  return { label, color: 'var(--accent)', bg: 'var(--border-soft)' };
 }
 
 function CircleGauge({ pct, color }) {
@@ -83,7 +102,7 @@ function CircleGauge({ pct, color }) {
 
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: 'rotate(-90deg)' }}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#232E3D" strokeWidth={stroke} />
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--track)" strokeWidth={stroke} />
       <circle
         cx={size/2} cy={size/2} r={r} fill="none"
         stroke={color} strokeWidth={stroke} strokeLinecap="round"
@@ -143,7 +162,7 @@ function LiveView() {
           <div style={{ textAlign: 'center', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6, padding: '24px 6px' }}>
             Live data couldn't load directly (the sensor API blocks cross-origin requests from some hosts).
             <br /><br />
-            <a href={RSF_PAGE} target="_blank" rel="noopener" style={{ color: 'var(--gold)' }}>Open the official live meter &#8594;</a>
+            <a href={RSF_PAGE} target="_blank" rel="noopener" style={{ color: 'var(--accent)' }}>Open the official live meter &#8594;</a>
           </div>
         ) : (
           <React.Fragment>
@@ -153,7 +172,7 @@ function LiveView() {
                 position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
                 alignItems: 'center', justifyContent: 'center'
               }}>
-                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 58, lineHeight: 1, color: s.color }}>
+                <div style={{ fontFamily: "'Inter', system-ui, sans-serif", fontSize: 58, fontWeight: 700, letterSpacing: -3, lineHeight: 1, color: s.color }}>
                   {state === 'loading' ? '--' : Math.round(pct)}%
                 </div>
                 <div style={{ fontSize: 12, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginTop: 6, fontWeight: 300 }}>
@@ -185,7 +204,7 @@ function LiveView() {
           onClick={fetchCount}
           style={{
             background: 'var(--border-soft)', border: '1px solid var(--border)', color: 'var(--text)',
-            fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: 1, textTransform: 'uppercase',
+            fontFamily: "'Inter', system-ui, sans-serif", fontSize: 12, letterSpacing: 1, textTransform: 'uppercase',
             padding: '9px 14px', borderRadius: 8, cursor: 'pointer'
           }}
         >
@@ -200,11 +219,14 @@ function LiveView() {
 }
 
 function ChartCanvas({ entries }) {
+  const theme = React.useContext(ThemeContext);
   const canvasRef = useRef(null);
   const chartRef = useRef(null);
 
   useEffect(() => {
     if (!canvasRef.current) return;
+    const css = getComputedStyle(document.documentElement);
+    const color = name => css.getPropertyValue(name).trim();
     const labels = entries.map((e) => new Date(e.t).toLocaleString([], { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
     const values = entries.map((e) => e.pct);
 
@@ -215,8 +237,8 @@ function ChartCanvas({ entries }) {
         labels,
         datasets: [{
           data: values,
-          borderColor: '#FDB515',
-          backgroundColor: 'rgba(253,181,21,0.12)',
+          borderColor: color('--accent'),
+          backgroundColor: color('--chart-fill'),
           fill: true,
           pointRadius: 0,
           borderWidth: 2,
@@ -228,13 +250,13 @@ function ChartCanvas({ entries }) {
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          y: { min: 0, max: 100, ticks: { color: '#8B93A0' }, grid: { color: '#1E2836' } },
-          x: { ticks: { color: '#8B93A0', maxTicksLimit: 6 }, grid: { color: '#1E2836' } }
+          y: { min: 0, max: 100, ticks: { color: color('--text-dim') }, grid: { color: color('--border-soft') } },
+          x: { ticks: { color: color('--text-dim'), maxTicksLimit: 6 }, grid: { color: color('--border-soft') } }
         }
       }
     });
     return () => { if (chartRef.current) chartRef.current.destroy(); };
-  }, [entries]);
+  }, [entries, theme]);
 
   return <canvas ref={canvasRef} style={{ width: '100%', height: 220 }} />;
 }
@@ -242,7 +264,7 @@ function ChartCanvas({ entries }) {
 function HistoryPanel({ entries }) {
   const [day, setDay] = useState(RSFHistory.parts(new Date()).day);
   const hours = RSFHistory.summarize(entries.map(e => ({ at: new Date(e.t).toISOString(), count: e.count })), day);
-  return <section aria-labelledby="history-heading" style={{ padding: '22px', borderTop: '1px solid var(--border)' }}>
+  return <section aria-labelledby="history-heading" style={{ padding: '0 0 22px', borderBottom: '1px solid var(--border)', marginBottom: 24 }}>
     <h2 id="history-heading" style={{ fontSize: 22, fontWeight: 500 }}>Plan your visit</h2>
     <p className="history-note">Hourly averages · last 8 weeks · Berkeley time</p>
     <div className="days" role="group" aria-label="Day of week">
@@ -343,9 +365,9 @@ function HistoryView() {
             onClick={() => setRange(d)}
             style={{
               flex: 1, padding: '8px 0', borderRadius: 8, cursor: 'pointer',
-              fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: 1, textTransform: 'uppercase',
-              background: range === d ? 'var(--gold)' : 'var(--border-soft)',
-              color: range === d ? '#0E1520' : 'var(--text-dim)',
+              fontFamily: "'Inter', system-ui, sans-serif", fontSize: 12, letterSpacing: 1, textTransform: 'uppercase',
+              background: range === d ? 'var(--accent)' : 'var(--border-soft)',
+              color: range === d ? 'var(--on-accent)' : 'var(--text-dim)',
               border: '1px solid var(--border)'
             }}
           >
@@ -379,12 +401,12 @@ function HistoryView() {
           onChange={(e) => setLookupTime(e.target.value)}
           style={{
             width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)',
-            background: 'var(--border-soft)', color: 'var(--text)', fontFamily: "'Oswald', sans-serif", fontSize: 13
+            background: 'var(--border-soft)', color: 'var(--text)', fontFamily: "'Inter', system-ui, sans-serif", fontSize: 13
           }}
         />
         {lookupResult && (
           <div style={{ marginTop: 10, fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.6 }}>
-            Closest reading: <span style={{ color: 'var(--gold)', fontWeight: 500 }}>{lookupResult.entry.pct}% full</span>
+            Closest reading: <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{lookupResult.entry.pct}% full</span>
             {' '}({lookupResult.entry.count} people) at {new Date(lookupResult.entry.t).toLocaleString()}
             {lookupResult.diffMinutes > 30 && (
               <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
@@ -401,7 +423,7 @@ function HistoryView() {
 function StatBox({ label, value }) {
   return (
     <div style={{ flex: 1, background: 'var(--border-soft)', borderRadius: 10, padding: '10px 0', textAlign: 'center' }}>
-      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: 'var(--gold)' }}>{value}</div>
+      <div style={{ fontFamily: "'Inter', system-ui, sans-serif", fontSize: 22, color: 'var(--accent)' }}>{value}</div>
       <div style={{ fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--text-faint)', marginTop: 2 }}>{label}</div>
     </div>
   );
@@ -409,6 +431,14 @@ function StatBox({ label, value }) {
 
 function App() {
   const [tab, setTab] = useState('live');
+  const [theme, setTheme] = useState(document.documentElement.dataset.theme);
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    document.querySelector('meta[name="theme-color"]').content = next === 'dark' ? '#111111' : '#F2F2F2';
+    try { localStorage.setItem('rsf-theme', next); } catch (_) {}
+    setTheme(next);
+  }
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
@@ -417,12 +447,17 @@ function App() {
   }, []);
 
   return (
-    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 18, overflow: 'hidden' }}>
+    <ThemeContext.Provider value={theme}>
+    <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 24, boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
       <div style={{ padding: '18px 22px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, letterSpacing: 1.5, color: 'var(--gold)' }}>RSF</div>
+          <div style={{ fontFamily: "'Inter', system-ui, sans-serif", fontSize: 24, fontWeight: 800, letterSpacing: -1, color: 'var(--accent)' }}>RSF</div>
           <div style={{ fontSize: 12, letterSpacing: 1, color: 'var(--text-dim)', marginTop: 2 }}>weight room crowd meter</div>
         </div>
+        <button className="theme-toggle" type="button" role="switch" aria-checked={theme === 'dark'} aria-label="Dark mode" onClick={toggleTheme}>
+          <span aria-hidden="true">{theme === 'dark' ? '☾' : '☀'}</span>
+          {theme === 'dark' ? 'Dark' : 'Light'}
+        </button>
       </div>
 
       <div style={{ display: 'flex', margin: '16px 22px 0', borderBottom: '1px solid var(--border)' }}>
@@ -432,9 +467,9 @@ function App() {
             onClick={() => setTab(t)}
             style={{
               flex: 1, padding: '10px 0', background: 'none', border: 'none', cursor: 'pointer',
-              fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase',
-              color: tab === t ? 'var(--gold)' : 'var(--text-faint)',
-              borderBottom: tab === t ? '2px solid var(--gold)' : '2px solid transparent',
+              fontFamily: "'Inter', system-ui, sans-serif", fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase',
+              color: tab === t ? 'var(--accent)' : 'var(--text-faint)',
+              borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
               marginBottom: -1
             }}
           >
@@ -445,6 +480,7 @@ function App() {
 
       {tab === 'live' ? <LiveView /> : <HistoryView />}
     </div>
+    </ThemeContext.Provider>
   );
 }
 
