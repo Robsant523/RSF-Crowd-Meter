@@ -23,7 +23,7 @@ async function setGithubToken() {
   const a = new Alert();
   a.title = "GitHub token";
   a.message = "Paste your fine-grained personal access token (Contents: read/write on RSF-Crowd-Meter only).";
-  a.addTextField("ghp_... or github_pat_...");
+  a.addSecureTextField("ghp_... or github_pat_...");
   a.addAction("Save");
   a.addCancelAction("Cancel");
   const result = await a.presentAlert();
@@ -34,50 +34,59 @@ async function setGithubToken() {
   return true;
 }
 
-// Pushes the full history array to history.json in the GitHub repo.
-// Requires a token already stored via setGithubToken(). Silently no-ops if none is set,
-// so the widget still works locally even before you've done the one-time setup.
+// Validate and merge without discarding observations from other devices.
+function mergeHistory(...sources) {
+  const entries = new Map();
+  for (const source of sources) {
+    if (!Array.isArray(source)) throw new Error("History must be an array; existing file was not replaced.");
+    for (const e of source) {
+      if (!e || !Number.isFinite(e.t) || !Number.isInteger(e.count) || e.count < 0)
+        throw new Error("Invalid history entry; existing file was not replaced.");
+      entries.set(e.t, { t: e.t, count: e.count, pct: Math.round(e.count / CAPACITY * 1000) / 10 });
+    }
+  }
+  return [...entries.values()].sort((a, b) => a.t - b.t).slice(-MAX_ENTRIES);
+}
+
+async function githubRequest(url, token, body) {
+  const req = new Request(url);
+  req.timeoutInterval = 15;
+  req.headers = { Authorization: "Bearer " + token, Accept: "application/vnd.github+json",
+    "Content-Type": "application/json", "User-Agent": "RSF-Crowd-Meter-Scriptable" };
+  if (body) { req.method = "PUT"; req.body = JSON.stringify(body); }
+  const text = await req.loadString();
+  const status = req.response.statusCode;
+  let data;
+  try { data = JSON.parse(text); } catch (_) { throw new Error(`GitHub returned invalid JSON (HTTP ${status}).`); }
+  return { status, data };
+}
+
 async function pushHistoryToGitHub(history) {
   const token = getGithubToken();
-  if (!token) return { skipped: true };
-
-  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
-  const headers = {
-    Authorization: "Bearer " + token,
-    Accept: "application/vnd.github+json",
-    "User-Agent": "RSF-Crowd-Meter-Scriptable"
-  };
-
-  // Need the current file's SHA to update it (GitHub requires this to avoid overwriting blind).
-  let sha = null;
+  if (!token) return { skipped: true, ok: false, error: "Sync not configured. Run RSF Setup." };
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
   try {
-    const getReq = new Request(apiUrl);
-    getReq.headers = headers;
-    const current = await getReq.loadJSON();
-    sha = current.sha || null;
-  } catch (e) {
-    sha = null; // file may not exist yet — that's fine, it'll be created
-  }
-
-  const contentStr = JSON.stringify(history);
-  const base64Content = Data.fromString(contentStr).toBase64String();
-
-  const putReq = new Request(apiUrl);
-  putReq.method = "PUT";
-  putReq.headers = headers;
-  const body = {
-    message: `Update history — ${new Date().toISOString()}`,
-    content: base64Content
-  };
-  if (sha) body.sha = sha;
-  putReq.body = JSON.stringify(body);
-
-  try {
-    const res = await putReq.loadJSON();
-    return { skipped: false, ok: !res.message || !res.message.includes("error"), raw: res };
-  } catch (e) {
-    return { skipped: false, ok: false, error: String(e) };
-  }
+    const local = mergeHistory(history);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await githubRequest(url + "?ref=main", token);
+      // Never interpret a failed read as an empty remote history.
+      if (current.status !== 200) throw new Error(`GitHub read failed (HTTP ${current.status}). Check token, repository access and history.json on main.`);
+      if (!current.data.sha || current.data.encoding !== "base64" || typeof current.data.content !== "string")
+        throw new Error("GitHub history response was incomplete.");
+      const remote = JSON.parse(Data.fromBase64String(current.data.content.replace(/\s/g, "")).toRawString());
+      const merged = mergeHistory(remote, local);
+      if (JSON.stringify(merged) === JSON.stringify(remote)) return { ok: true, skipped: false, count: merged.length };
+      const result = await githubRequest(url, token, {
+        message: "Record phone occupancy readings", branch: "main", sha: current.data.sha,
+        content: Data.fromString(JSON.stringify(merged)).toBase64String()
+      });
+      if (result.status === 409) continue; // Re-read and merge against the new SHA.
+      if (![200, 201].includes(result.status) || !result.data.commit?.sha)
+        throw new Error(`GitHub upload failed (HTTP ${result.status}). Check Contents write permission, token expiry and branch rules.`);
+      return { ok: true, skipped: false, count: merged.length };
+    }
+    throw new Error("GitHub changed during all three upload attempts. Local readings are saved; retry later.");
+  } catch (e) { return { skipped: false, ok: false, error: String(e) }; }
 }
 
 function logPath() {
@@ -89,34 +98,34 @@ function logPath() {
 async function fetchCount() {
   const req = new Request(SPACE_URL);
   req.headers = { Authorization: "Bearer " + TOKEN };
+  req.timeoutInterval = 15;
   const json = await req.loadJSON();
+  if (req.response.statusCode !== 200 || !Number.isInteger(json.count) || json.count < 0)
+    throw new Error(`Invalid sensor response (HTTP ${req.response.statusCode}).`);
   return json.count;
 }
 
-function loadHistory() {
+async function loadHistory() {
   const fm = FileManager.iCloud();
   const path = logPath();
   if (!fm.fileExists(path)) return [];
-  try {
-    if (fm.isFileDownloaded(path) === false) fm.downloadFileFromiCloud(path);
-    const raw = fm.readString(path);
-    return JSON.parse(raw);
-  } catch (e) {
-    return [];
-  }
+  await fm.downloadFileFromiCloud(path);
+  // Propagate read/parse errors so recordSample cannot overwrite a failed read.
+  return mergeHistory(JSON.parse(fm.readString(path)));
 }
 
 function saveHistory(entries) {
   const fm = FileManager.iCloud();
   const path = logPath();
-  const trimmed = entries.slice(-MAX_ENTRIES);
+  const trimmed = mergeHistory(entries);
   fm.writeString(path, JSON.stringify(trimmed));
   return trimmed;
 }
 
 // Call after a successful fetch — appends {t, count, pct} and persists it.
-function recordSample(count) {
-  const history = loadHistory();
+async function recordSample(count) {
+  if (!Number.isInteger(count) || count < 0) throw new Error("Invalid sensor count");
+  const history = await loadHistory();
   history.push({
     t: Date.now(),
     count: count,
@@ -126,16 +135,16 @@ function recordSample(count) {
 }
 
 // Returns entries between two Date objects (inclusive), oldest first.
-function historyBetween(startDate, endDate) {
-  const all = loadHistory();
+async function historyBetween(startDate, endDate) {
+  const all = await loadHistory();
   const startMs = startDate.getTime();
   const endMs = endDate.getTime();
   return all.filter((e) => e.t >= startMs && e.t <= endMs);
 }
 
 // Finds the logged entry closest to a given Date.
-function nearestEntry(targetDate) {
-  const all = loadHistory();
+async function nearestEntry(targetDate) {
+  const all = await loadHistory();
   if (all.length === 0) return null;
   const targetMs = targetDate.getTime();
   let best = all[0];
@@ -152,6 +161,7 @@ function nearestEntry(targetDate) {
 
 module.exports = {
   CAPACITY,
+  mergeHistory,
   fetchCount,
   loadHistory,
   saveHistory,
@@ -162,3 +172,4 @@ module.exports = {
   setGithubToken,
   pushHistoryToGitHub
 };
+

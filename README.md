@@ -1,57 +1,73 @@
-# RSF crowd meter — install as an app + phone widget with history
+# RSF Crowd Meter
 
-This is an installable web app (PWA) plus an iPhone home-screen widget. Both show live RSF weight room occupancy as a circular gauge, and the widget logs history that syncs to this website's History tab.
+A monochrome live gym meter with light/dark mode and weekday occupancy history. Collection runs on your own Mac, Linux computer, or Raspberry Pi using Python and cron. No Python packages, cloud collector, or phone widget are required.
 
-## 1. Push these files to your repo
+## Collect on your computer
 
-```
-git init
-git add .
-git commit -m "RSF crowd meter with history"
-git branch -M main
-git remote add origin https://github.com/Robsant523/RSF-Crowd-Meter.git
-git push -u origin main
+Install Python 3.9 or newer, then clone this repository after the changes are merged. Keep the checkout in a permanent folder, such as `/home/pi/RSF-Crowd-Meter` or `/Users/yourname/RSF-Crowd-Meter`.
+
+```sh
+python3 scripts/collect.py
 ```
 
-Then: Settings → Pages → Deploy from branch → `main` → `/ (root)`. Live at `https://robsant523.github.io/RSF-Crowd-Meter/`.
+Each successful run appends a UTC timestamp and nonnegative integer count to `local-data/occupancy.sqlite3`. It atomically exports the last 56 days to `data/history.json`, which the website already understands. The SQLite database keeps all observations; back it up if you want long-term history. Errors exit nonzero and never become fake zero readings. A failed export or upload does not discard the saved database reading. Failed uploads are caught up by the next successful run's full export.
 
-## 2. Create a GitHub token (lets the widget write history to your repo)
+Paths are resolved relative to the script's project directory, regardless of cron's working directory. Optional `--db` and `--output` flags accept alternate paths. Run `python3 scripts/collect.py --help` for options. The existing sensor share token is in `scripts/source.json`.
 
-1. GitHub → your profile photo → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
-2. **Repository access** → Only select repositories → `RSF-Crowd-Meter`.
-3. **Permissions** → Repository permissions → **Contents** → set to **Read and write**.
-4. Generate, then copy the token — GitHub only shows it once.
+## Keep the hosted website updated (optional)
 
-## 3. Set up Scriptable on your iPhone
+Local collection alone does **not** update GitHub Pages. To publish automatically:
 
-Install the free **Scriptable** app, then create three scripts (paste the matching file's contents into each, name them exactly as shown):
+1. Merge this project's changes first, so `data/history.json` exists on `main`.
+2. Set repository Settings → Pages → Source to **GitHub Actions**. The included workflow only deploys after a push or manual run; it does not collect data.
+3. Create a fine-grained GitHub token limited to this repository, with **Contents: read and write**. Repository rules must permit its commits to main.
+4. Save the token in a private file **outside the repository**, for example `/home/pi/.config/rsf/github-token`. Restrict it with `chmod 600 /home/pi/.config/rsf/github-token`.
+5. Test:
 
-| Script name | File |
-|---|---|
-| `RSFData` | `RSFData.js` — shared module, not run directly |
-| `RSF Crowd` | `rsf-crowd-meter-scriptable.js` — the widget |
-| `RSF History` | `RSF-History.js` — local history viewer/chart |
-| `RSF Setup` | `RSF-Setup.js` — run this once |
+```sh
+python3 scripts/collect.py --publish --token-file /home/pi/.config/rsf/github-token
+```
 
-Run **RSF Setup** once and paste in the token from step 2 when prompted. It's stored in the iOS Keychain, not in the script text.
+Alternatively supply `RSF_GITHUB_TOKEN` in the process environment. Do not put a token in source code, crontab command text, or a public issue. Publishing updates only `data/history.json`; your user token's push triggers the deployment workflow. A valid sensor response is saved before publishing is attempted.
 
-Then add the widget: long-press your home screen → **+** → **Scriptable** → small or medium → edit widget → set Script to `RSF Crowd`.
+Use one collection computer/database as the source for this file. Starting with an empty database replaces the website export with that database's readings; it does not import old JSON history. Keep/move your SQLite database when replacing the computer. Historical phone readings remain separate in root `history.json` and are still readable by the website. The old Scriptable files are optional legacy clients, not required collectors.
 
-## 4. What happens automatically
+## Schedule on Mac/Linux/Raspberry Pi
 
-Every time the widget refreshes (iOS decides the timing, roughly every 15–30+ min):
-- It fetches the live count
-- Appends it to a local history log on your phone
-- Pushes the updated history to `history.json` in your GitHub repo
+On the collection computer, run `command -v python3` to find its absolute Python path, and `pwd` inside the checkout to find the project path. Run the command manually once before scheduling it.
 
-Your website's **History** tab reads that same `history.json` file, so it updates within a minute or two of each widget refresh (however long GitHub Pages takes to redeploy).
+Open `crontab -e`, then add this line **with your actual paths**:
 
-## 5. Installing the web app itself
+```cron
+*/15 * * * * /usr/bin/python3 /home/pi/RSF-Crowd-Meter/scripts/collect.py --publish --token-file /home/pi/.config/rsf/github-token >> /home/pi/RSF-Crowd-Meter/collector.log 2>&1
+```
 
-**iPhone (Safari):** open your hosted URL → Share → "Add to Home Screen."
-**Mac/Windows (Chrome/Edge):** open the URL → install icon in the address bar → "Install."
+For local-only storage, omit `--publish --token-file ...`. On a Mac, Python may be `/opt/homebrew/bin/python3` or another path; use `command -v python3`, not the example. Quote paths containing spaces. Cron treats `%` specially, so avoid that character in paths. Ensure the cron service is enabled on Linux and that the user can access the project files. No root cron job is needed.
 
-## About the data
+Verify the entry with `crontab -l`, wait for the next quarter hour, then inspect `collector.log` and query the database:
 
-Both the widget and the website call the same Density.io sensor feed Berkeley's own page uses, capped at 140 people = 100%. If that call is ever blocked, both fall back to a link to Berkeley's official page.
+```sh
+sqlite3 /home/pi/RSF-Crowd-Meter/local-data/occupancy.sqlite3 'SELECT at, count FROM readings ORDER BY at DESC LIMIT 5;'
+```
 
+The sqlite3 command-line tool is optional; Python already includes the SQLite library used by the collector. Remove the line with `crontab -e` to stop. Rotate or occasionally clear the log so it does not grow forever.
+
+Collection runs only while the computer is awake, online, and the scheduler is running. Missed runs are not backfilled. A Raspberry Pi or an old laptop kept awake can collect continuously. [Cron syntax reference](https://man7.org/linux/man-pages/man5/crontab.5.html).
+
+## Windows alternative
+
+In Task Scheduler, create a task with a daily trigger, repeating every 15 minutes indefinitely. Set Program to the full path of `python.exe`, Arguments to `"C:\RSF-Crowd-Meter\scripts\collect.py"` (plus optional `--publish --token-file "C:\private\github-token"`), and Start in to `C:\RSF-Crowd-Meter`. Choose “Do not start a new instance” if the task is already running. Configure the task to run under the account that owns the files; test with **Run** and check Last Run Result. [Microsoft Task Scheduler reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/schtasks-create).
+
+## Website history
+
+Weekday/hour averages use America/Los_Angeles time with each recorded date weighted equally. A dash means missing data; zero is a real reading. All hours are shown, including possible closed hours. Several weeks of samples are needed for useful comparisons. The live count and collection both depend on the upstream sensor remaining available.
+
+## Tests
+
+```sh
+python3 -m unittest discover -s scripts -p 'test_*.py'
+node scripts/test-history.cjs
+node --test scripts/test-phone.cjs
+```
+
+The collector tests cover SQLite append behavior, UTC exports, retention, duplicate timestamps, invalid values, network failures, and persistence after export failures. Scheduling must be installed and verified on the collection computer; this repository does not install a cron job automatically.
